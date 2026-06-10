@@ -1,0 +1,5 @@
+polar-python>=1.1.1
+numpy>=1.24.0
+scipy>=1.10.0
+PyQt6>=6.5.0
+pyqtgraph>=0.13.0
