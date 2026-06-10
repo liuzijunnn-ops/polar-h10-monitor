@@ -25,11 +25,13 @@ from PyQt6.QtWidgets import (
 )
 
 from device_worker import PolarWorker
-from hrv import compute_hrv
+from hrv import MIN_DURATION_LIVE, compute_hrv, rr_cumulative_duration_sec
+from paths import LOGS_DIR
 from polar_python.models import ACCData, ECGData, HRData
-from recorder import ACC_SAMPLE_RATE, ECG_SAMPLE_RATE, LOGS_DIR, SessionRecorder, default_session_name
+from recorder import ACC_SAMPLE_RATE, ECG_SAMPLE_RATE, SessionRecorder, default_session_name
 
-RR_WINDOW = 60
+RR_WINDOW = 60  # time-domain rolling window (beats)
+RR_FREQ_WINDOW = 150  # frequency needs ~45–60 s cumulative RR; 60 beats alone is often <60 s
 PLOT_REFRESH_MS = 16  # ~60 fps display refresh
 ECG_SAMPLE_RATE_HZ = ECG_SAMPLE_RATE
 ACC_SAMPLE_RATE_HZ = ACC_SAMPLE_RATE
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self._acc_y: list[int] = []
         self._acc_z: list[int] = []
         self._rr_window: deque[float] = deque(maxlen=RR_WINDOW)
+        self._rr_freq_window: deque[float] = deque(maxlen=RR_FREQ_WINDOW)
 
         self._ecg_dirty = False
         self._acc_dirty = False
@@ -150,7 +153,7 @@ class MainWindow(QMainWindow):
             hrv_layout.addWidget(value, row, 1)
         side.addWidget(hrv_box)
 
-        freq_box = QGroupBox("HRV 频域 (≥60s 数据)")
+        freq_box = QGroupBox(f"HRV 频域 (需 ≥{int(MIN_DURATION_LIVE)}s RR)")
         freq_layout = QGridLayout(freq_box)
         self.freq_labels: dict[str, QLabel] = {}
         freq_metrics = [
@@ -164,6 +167,10 @@ class MainWindow(QMainWindow):
             value = QLabel("--")
             self.freq_labels[key] = value
             freq_layout.addWidget(value, row, 1)
+        self.freq_status = QLabel("累积 RR 时长: 0s")
+        self.freq_status.setStyleSheet("color: #888; font-size: 11px;")
+        self.freq_status.setWordWrap(True)
+        freq_layout.addWidget(self.freq_status, len(freq_metrics), 0, 1, 2)
         side.addWidget(freq_box)
 
         rec_box = QGroupBox("录制状态")
@@ -200,7 +207,10 @@ class MainWindow(QMainWindow):
             plot.showButtons()
             vb = plot.getViewBox()
             vb.setMouseMode(pg.ViewBox.PanMode)
-            vb.enableAutoRange(axis="y", enable=False)
+            vb.enableAutoRange(x=False, y=False)
+
+        self.ecg_plot.setXRange(0, 1, padding=0.02)
+        self.acc_plot.setXRange(0, 1, padding=0.02)
 
         self.ecg_curve = self.ecg_plot.plot(pen=pg.mkPen("#00e676", width=1))
         self.ecg_curve.setClipToView(True)
@@ -212,10 +222,6 @@ class MainWindow(QMainWindow):
         for curve in (self.acc_x_curve, self.acc_y_curve, self.acc_z_curve):
             curve.setClipToView(True)
             curve.setDownsampling(auto=True, method="peak")
-
-        # Default view: latest ~10 s of ECG / ~30 s of ACC
-        self._ecg_view_samples = ECG_SAMPLE_RATE_HZ * 10
-        self._acc_view_samples = ACC_SAMPLE_RATE_HZ * 30
 
     def _connect_signals(self) -> None:
         self.worker.ecg_received.connect(self._on_ecg)
@@ -257,13 +263,24 @@ class MainWindow(QMainWindow):
             self.rr_value.setText(f"{latest_rr:.0f}")
             for rr in data.rr_intervals:
                 self._rr_window.append(rr)
+                self._rr_freq_window.append(rr)
             self._update_hrv_display()
         self.recorder.add_hr(data.heartrate, data.rr_intervals)
 
     def _update_hrv_display(self) -> None:
-        metrics = compute_hrv(list(self._rr_window), include_frequency=len(self._rr_window) >= 30)
+        rr_time = list(self._rr_window)
+        rr_freq = list(self._rr_freq_window)
+        freq_duration = rr_cumulative_duration_sec(rr_freq)
+
+        metrics = compute_hrv(
+            rr_time,
+            include_frequency=True,
+            freq_rr_intervals_ms=rr_freq,
+            min_freq_duration_sec=MIN_DURATION_LIVE,
+        )
         if not metrics:
             return
+
         for key, label in self.hrv_labels.items():
             value = getattr(metrics, key)
             if key == "count":
@@ -277,23 +294,44 @@ class MainWindow(QMainWindow):
             for key, label in self.freq_labels.items():
                 value = getattr(metrics.frequency, key)
                 label.setText(f"{value:.2f}")
+            self.freq_status.setText(
+                f"累积 RR 时长: {freq_duration:.0f}s | 窗口 {len(rr_freq)} 拍"
+            )
+            self.freq_status.setStyleSheet("color: #66bb6a; font-size: 11px;")
         else:
             for label in self.freq_labels.values():
                 label.setText("--")
+            need = max(0.0, MIN_DURATION_LIVE - freq_duration)
+            self.freq_status.setText(
+                f"累积 RR 时长: {freq_duration:.0f}s / {int(MIN_DURATION_LIVE)}s"
+                f"（还需约 {need:.0f}s）| 窗口 {len(rr_freq)} 拍"
+            )
+            self.freq_status.setStyleSheet("color: #888; font-size: 11px;")
 
-    def _is_view_at_tail(self, plot: pg.PlotWidget, total: int, margin: float = 0.05) -> bool:
-        """True if the visible x-range is near the latest samples (user hasn't panned away)."""
+    def _is_viewing_all(self, plot: pg.PlotWidget, total: int, margin: float = 0.02) -> bool:
+        """True if x-axis shows the full buffer (user hasn't zoomed/panned to a sub-range)."""
+        if total <= 1:
+            return True
         x0, x1 = plot.getViewBox().viewRange()[0]
-        return x1 >= total * (1.0 - margin)
+        span = x1 - x0
+        full_span = max(total, 1)
+        return x0 <= full_span * margin and x1 >= full_span * (1.0 - margin) and span >= full_span * (
+            1.0 - 2 * margin
+        )
+
+    def _apply_view_all_x(self, plot: pg.PlotWidget, total: int) -> None:
+        if total <= 0:
+            plot.setXRange(0, 1, padding=0.02)
+        else:
+            plot.setXRange(0, total, padding=0.02)
 
     def _refresh_plots(self) -> None:
         if self._ecg_dirty and self._ecg_buffer:
             n = len(self._ecg_buffer)
             xs = np.arange(n, dtype=np.float64)
             self.ecg_curve.setData(xs, np.asarray(self._ecg_buffer, dtype=np.float32))
-            if self._is_view_at_tail(self.ecg_plot, n):
-                start = max(0, n - self._ecg_view_samples)
-                self.ecg_plot.setXRange(start, n, padding=0.02)
+            if self._is_viewing_all(self.ecg_plot, n):
+                self._apply_view_all_x(self.ecg_plot, n)
             self._ecg_dirty = False
 
         if self._acc_dirty and self._acc_x:
@@ -305,9 +343,8 @@ class MainWindow(QMainWindow):
             self.acc_x_curve.setData(xs, arr_x)
             self.acc_y_curve.setData(xs, arr_y)
             self.acc_z_curve.setData(xs, arr_z)
-            if self._is_view_at_tail(self.acc_plot, n):
-                start = max(0, n - self._acc_view_samples)
-                self.acc_plot.setXRange(start, n, padding=0.02)
+            if self._is_viewing_all(self.acc_plot, n):
+                self._apply_view_all_x(self.acc_plot, n)
             self._acc_dirty = False
 
         self.buffer_info.setText(

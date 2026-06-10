@@ -15,6 +15,8 @@ VLF_BAND = (0.0033, 0.04)
 
 INTERP_FS = 4.0  # Hz, standard resampling rate for HRV spectral analysis
 MIN_RR_FOR_FREQ = 30
+MIN_DURATION_RECORDING = 60.0  # Task Force: prefer ≥60 s for saved sessions
+MIN_DURATION_LIVE = 45.0  # relaxed threshold for real-time display
 
 
 @dataclass
@@ -56,7 +58,20 @@ def _band_power(freqs: np.ndarray, psd: np.ndarray, low: float, high: float) -> 
     return float(np.trapezoid(psd[mask], freqs[mask]))
 
 
-def compute_freq_hrv(rr_intervals_ms: list[float], interp_fs: float = INTERP_FS) -> FreqHRVMetrics | None:
+def rr_cumulative_duration_sec(rr_intervals_ms: list[float]) -> float:
+    """Sum of RR intervals in seconds."""
+    rr = np.asarray(rr_intervals_ms, dtype=np.float64)
+    rr = rr[np.isfinite(rr) & (rr > 0)]
+    if len(rr) == 0:
+        return 0.0
+    return float(np.sum(rr) / 1000.0)
+
+
+def compute_freq_hrv(
+    rr_intervals_ms: list[float],
+    interp_fs: float = INTERP_FS,
+    min_duration_sec: float = MIN_DURATION_RECORDING,
+) -> FreqHRVMetrics | None:
     """Compute frequency-domain HRV via interpolated tachogram + Welch PSD."""
     if len(rr_intervals_ms) < MIN_RR_FOR_FREQ:
         return None
@@ -66,11 +81,11 @@ def compute_freq_hrv(rr_intervals_ms: list[float], interp_fs: float = INTERP_FS)
     if len(rr) < MIN_RR_FOR_FREQ:
         return None
 
-    # Beat times in seconds (cumulative RR)
-    beat_times = np.cumsum(rr) / 1000.0
-    duration = beat_times[-1]
-    if duration < 60.0:
+    duration = float(np.sum(rr) / 1000.0)
+    if duration < min_duration_sec:
         return None
+
+    beat_times = np.cumsum(rr) / 1000.0
 
     t_uniform = np.arange(0, duration, 1.0 / interp_fs)
     rr_uniform = np.interp(t_uniform, beat_times, rr)
@@ -107,7 +122,12 @@ def compute_freq_hrv(rr_intervals_ms: list[float], interp_fs: float = INTERP_FS)
     )
 
 
-def compute_hrv(rr_intervals_ms: list[float], include_frequency: bool = True) -> HRVMetrics | None:
+def compute_hrv(
+    rr_intervals_ms: list[float],
+    include_frequency: bool = True,
+    freq_rr_intervals_ms: list[float] | None = None,
+    min_freq_duration_sec: float = MIN_DURATION_RECORDING,
+) -> HRVMetrics | None:
     """Compute time-domain HRV; optionally attach frequency-domain metrics."""
     if len(rr_intervals_ms) < 2:
         return None
@@ -123,7 +143,10 @@ def compute_hrv(rr_intervals_ms: list[float], include_frequency: bool = True) ->
     pnn50 = float(np.sum(np.abs(diff) > 50) / len(diff) * 100)
     mean_rr = float(np.mean(rr))
 
-    freq = compute_freq_hrv(list(rr)) if include_frequency else None
+    freq = None
+    if include_frequency:
+        freq_rr = freq_rr_intervals_ms if freq_rr_intervals_ms is not None else list(rr)
+        freq = compute_freq_hrv(freq_rr, min_duration_sec=min_freq_duration_sec)
 
     return HRVMetrics(
         count=len(rr),

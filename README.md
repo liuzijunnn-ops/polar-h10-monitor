@@ -12,28 +12,86 @@
 
 ## 环境要求
 
-- Python 3.10+
-- macOS / Windows / Linux（需支持 BLE）
-- Polar H10 心率带
+- Polar H10 心率带（湿润电极贴片后佩戴）
+- 电脑支持蓝牙 BLE
+- **方式 A（推荐）**：Windows 10/11 或 macOS，无需安装 Python
+- **方式 B**：Python 3.10+（开发者 / Linux）
 
-## 安装
+---
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+## 安装教程（普通用户 · 下载安装包）
+
+### 1. 下载
+
+打开 GitHub **Releases** 页面，下载对应系统的 zip：
+
+| 系统 | 文件 |
+|------|------|
+| Windows | `PolarH10Monitor-Windows.zip` |
+| macOS | `PolarH10Monitor-macOS.zip` |
+
+> 若 Release 尚未生成：进入仓库 **Actions → Build**，等最新一次构建完成后，在 **Artifacts** 里下载 `PolarH10Monitor-Windows` 或 `PolarH10Monitor-macOS`。
+
+### 2. 解压
+
+将 zip 解压到任意目录，例如：
+
+- Windows：`C:\Tools\PolarH10Monitor\`
+- macOS：`~/Applications/PolarH10Monitor/`
+
+解压后文件夹内应包含 `PolarH10Monitor.exe`（Windows）或 `PolarH10Monitor`（macOS）及依赖文件。**请保留整个文件夹**，不要只复制单个 exe。
+
+### 3. 首次运行
+
+**Windows**
+
+1. 确认电脑蓝牙已开启
+2. 双击 `PolarH10Monitor.exe`
+3. 若 Windows 安全提示「未知发布者」，点 **更多信息 → 仍要运行**（开源未签名应用常见）
+
+**macOS**
+
+1. 确认蓝牙已开启
+2. 首次运行若提示「无法验证开发者」：
+   ```bash
+   xattr -cr /路径/to/PolarH10Monitor
+   ```
+   或在 **系统设置 → 隐私与安全性** 中允许打开
+3. 双击 `PolarH10Monitor` 运行
+
+### 4. 使用
+
+1. 打开 Polar H10，贴在胸口
+2. 程序自动扫描并连接（顶部显示「已连接」）
+3. （可选）修改顶部 **会话名称**
+4. 点击 **开始录制** → 采集一段时间 → 点击 **停止录制**
+5. 数据保存在程序**同级目录**的 `logs/<会话名>/` 下
+
+### 5. 数据位置
+
+```
+PolarH10Monitor/          ← 程序所在文件夹
+├── PolarH10Monitor.exe   （或 macOS 可执行文件）
+└── logs/
+    └── 20260610-120000/  ← 每次录制一个文件夹
+        ├── raw/
+        ├── csv/
+        ├── hrv.json
+        └── meta.json
 ```
 
-## 运行
+---
+
+## 安装教程（开发者 · 源码运行）
 
 ```bash
+git clone https://github.com/liuzijunnn-ops/polar-h10-monitor.git
+cd polar-h10-monitor
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 python main.py
 ```
-
-1. 打开 Polar H10（湿润电极贴片后佩戴）
-2. 程序自动扫描并连接
-3. 输入会话名称（可选），点击 **开始录制**
-4. 再次点击 **停止录制**，数据自动保存
 
 ## 输出目录结构
 
@@ -67,4 +125,31 @@ logs/<会话名>/
 - VLF / LF / HF 功率（ms²）
 - LF/HF 比值、总功率
 
-界面侧边栏：时域为最近 60 个 RR 的滚动窗口；频域需累积足够时长后显示。`hrv.json` 为整段录制的完整统计。
+界面侧边栏：时域为最近 60 个 RR 的滚动窗口；频域使用最近 150 个 RR，累积时长 ≥45s 后显示（下方有进度提示）。`hrv.json` 为整段录制的完整统计（频域要求 ≥60s）。
+
+## 打包为可双击运行的程序
+
+### GitHub Actions（推荐）
+
+推送到 GitHub 后，在 **Actions** 页可下载构建产物：
+
+- 推送到 `main` / 打 `v*` 标签 → 自动构建 Windows + macOS
+- 手动触发：**Actions → Build → Run workflow**
+
+打标签 `v1.0.0` 等会自动创建 [Release](https://github.com/liuzijunnn-ops/polar-h10-monitor/releases) 并附上 zip 安装包。
+
+### 本地打包
+
+**Windows：**
+
+```bat
+build_windows.bat
+```
+
+**macOS：**
+
+```bash
+chmod +x build_mac.sh && ./build_mac.sh
+```
+
+运行 `dist/PolarH10Monitor/` 下的可执行文件，`logs/` 保存在程序同级目录。

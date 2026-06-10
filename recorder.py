@@ -11,8 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from hrv import HRVMetrics, compute_hrv, save_hrv_json
-
-LOGS_DIR = Path("logs")
+from paths import LOGS_DIR
 RAW_DIR = "raw"
 CSV_DIR = "csv"
 
