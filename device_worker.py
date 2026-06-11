@@ -75,15 +75,24 @@ class PairingPolarDevice(PolarDevice):
     def __init__(self, address_or_ble_device: Any) -> None:
         super().__init__(address_or_ble_device)
         if sys.platform == "win32":
-            self._client = BleakClient(address_or_ble_device, pair=True, timeout=30.0)
+            self._client = BleakClient(address_or_ble_device, timeout=30.0)
 
     async def connect(self) -> None:
         if sys.platform != "win32":
             await super().connect()
             return
 
-        logger.info("Connecting with Windows pairing enabled")
+        logger.info("Connecting on Windows before explicit pairing")
         await self._client.connect()
+
+        try:
+            logger.info("Attempting Windows BLE pair after connect")
+            await asyncio.wait_for(self._client.pair(), timeout=20.0)
+            logger.info("Windows BLE pair completed")
+        except TimeoutError:
+            logger.warning("Windows BLE pair timed out; continuing to PMD notifications")
+        except Exception as exc:
+            logger.warning("Windows BLE pair failed; continuing to PMD notifications: %s", exc)
 
         await self._client.start_notify(
             PolarCharacteristic.PMD_CONTROL_POINT.value,
