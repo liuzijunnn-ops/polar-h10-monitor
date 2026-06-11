@@ -17,6 +17,8 @@ INTERP_FS = 4.0  # Hz, standard resampling rate for HRV spectral analysis
 MIN_RR_FOR_FREQ = 30
 MIN_DURATION_RECORDING = 60.0  # Task Force: prefer ≥60 s for saved sessions
 MIN_DURATION_LIVE = 45.0  # relaxed threshold for real-time display
+MIN_VALID_RR_MS = 300.0
+MAX_VALID_RR_MS = 2000.0
 
 
 @dataclass
@@ -58,10 +60,20 @@ def _band_power(freqs: np.ndarray, psd: np.ndarray, low: float, high: float) -> 
     return float(np.trapezoid(psd[mask], freqs[mask]))
 
 
+def filter_valid_rr_intervals(rr_intervals_ms: list[float]) -> list[float]:
+    """Drop non-finite and physiologically implausible RR intervals."""
+    rr = np.asarray(rr_intervals_ms, dtype=np.float64)
+    rr = rr[
+        np.isfinite(rr)
+        & (rr >= MIN_VALID_RR_MS)
+        & (rr <= MAX_VALID_RR_MS)
+    ]
+    return rr.tolist()
+
+
 def rr_cumulative_duration_sec(rr_intervals_ms: list[float]) -> float:
     """Sum of RR intervals in seconds."""
-    rr = np.asarray(rr_intervals_ms, dtype=np.float64)
-    rr = rr[np.isfinite(rr) & (rr > 0)]
+    rr = np.asarray(filter_valid_rr_intervals(rr_intervals_ms), dtype=np.float64)
     if len(rr) == 0:
         return 0.0
     return float(np.sum(rr) / 1000.0)
@@ -76,8 +88,7 @@ def compute_freq_hrv(
     if len(rr_intervals_ms) < MIN_RR_FOR_FREQ:
         return None
 
-    rr = np.asarray(rr_intervals_ms, dtype=np.float64)
-    rr = rr[np.isfinite(rr) & (rr > 0)]
+    rr = np.asarray(filter_valid_rr_intervals(rr_intervals_ms), dtype=np.float64)
     if len(rr) < MIN_RR_FOR_FREQ:
         return None
 
@@ -132,8 +143,7 @@ def compute_hrv(
     if len(rr_intervals_ms) < 2:
         return None
 
-    rr = np.asarray(rr_intervals_ms, dtype=np.float64)
-    rr = rr[np.isfinite(rr) & (rr > 0)]
+    rr = np.asarray(filter_valid_rr_intervals(rr_intervals_ms), dtype=np.float64)
     if len(rr) < 2:
         return None
 

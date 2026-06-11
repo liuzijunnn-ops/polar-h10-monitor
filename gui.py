@@ -6,6 +6,7 @@ from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 import logging
+import math
 import time
 
 import numpy as np
@@ -28,7 +29,13 @@ from PyQt6.QtWidgets import (
 )
 
 from device_worker import PolarWorker
-from hrv import MIN_DURATION_LIVE, compute_freq_hrv, compute_hrv, rr_cumulative_duration_sec
+from hrv import (
+    MIN_DURATION_LIVE,
+    compute_freq_hrv,
+    compute_hrv,
+    filter_valid_rr_intervals,
+    rr_cumulative_duration_sec,
+)
 from paths import LOGS_DIR
 from polar_ble import ACCData, ECGData, HRData
 from recorder import ACC_SAMPLE_RATE, ECG_SAMPLE_RATE, SessionRecorder, default_session_name
@@ -39,6 +46,7 @@ RR_WINDOW = 60  # time-domain rolling window (beats)
 RR_FREQ_WINDOW = 150  # frequency needs ~45–60 s cumulative RR; 60 beats alone is often <60 s
 PLOT_REFRESH_MS = 16  # ~60 fps display refresh
 FREQ_UPDATE_MIN_INTERVAL_SEC = 5.0
+RECORDING_STABILIZATION_SEC = 10.0
 ECG_SAMPLE_RATE_HZ = ECG_SAMPLE_RATE
 ACC_SAMPLE_RATE_HZ = ACC_SAMPLE_RATE
 
@@ -72,6 +80,9 @@ class MainWindow(QMainWindow):
         self._freq_future: Future | None = None
         self._last_freq_started_at = 0.0
         self._freq_generation = 0
+        self._stabilizing = False
+        self._stabilization_deadline = 0.0
+        self._pending_session_name = ""
 
         self._build_ui()
         self._connect_signals()
@@ -260,11 +271,15 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "连接错误", text)
 
     def _on_ecg(self, data: ECGData) -> None:
+        if not self.recorder.recording:
+            return
         self._ecg_buffer.extend(data.data)
         self._ecg_dirty = True
         self.recorder.add_ecg(data.timestamp, data.data)
 
     def _on_acc(self, data: ACCData) -> None:
+        if not self.recorder.recording:
+            return
         for x, y, z in data.data:
             self._acc_x.append(x)
             self._acc_y.append(y)
@@ -273,16 +288,23 @@ class MainWindow(QMainWindow):
         self.recorder.add_acc(data.timestamp, data.data)
 
     def _on_hr(self, data: HRData) -> None:
+        if not self.recorder.recording:
+            return
+
         self.hr_value.setText(str(data.heartrate))
-        if data.rr_intervals:
-            latest_rr = data.rr_intervals[-1]
+        valid_rr = filter_valid_rr_intervals(data.rr_intervals)
+        dropped = len(data.rr_intervals) - len(valid_rr)
+        if dropped:
+            logger.info("Dropped %d invalid RR interval(s): %s", dropped, data.rr_intervals)
+
+        if valid_rr:
+            latest_rr = valid_rr[-1]
             self.rr_value.setText(f"{latest_rr:.0f}")
-            if self.recorder.recording:
-                for rr in data.rr_intervals:
-                    self._rr_window.append(rr)
-                    self._rr_freq_window.append(rr)
-                self._update_hrv_display()
-        self.recorder.add_hr(data.heartrate, data.rr_intervals)
+            for rr in valid_rr:
+                self._rr_window.append(rr)
+                self._rr_freq_window.append(rr)
+            self._update_hrv_display()
+        self.recorder.add_hr(data.heartrate, valid_rr)
 
     def _reset_live_hrv_display(self) -> None:
         self._rr_window.clear()
@@ -298,6 +320,21 @@ class MainWindow(QMainWindow):
         for label in self.hrv_labels.values():
             label.setText("--")
         self._clear_freq_display(0.0, 0)
+
+    def _reset_signal_buffers(self) -> None:
+        self._ecg_buffer.clear()
+        self._acc_x.clear()
+        self._acc_y.clear()
+        self._acc_z.clear()
+        self._ecg_dirty = False
+        self._acc_dirty = False
+        self.ecg_curve.setData([], [])
+        self.acc_x_curve.setData([], [])
+        self.acc_y_curve.setData([], [])
+        self.acc_z_curve.setData([], [])
+        self._apply_view_all_x(self.ecg_plot, 0)
+        self._apply_view_all_x(self.acc_plot, 0)
+        self.buffer_info.setText("缓冲: ECG 0 (0.0s) | ACC 0 (0.0s)")
 
     def _update_hrv_display(self) -> None:
         rr_time = list(self._rr_window)
@@ -414,6 +451,15 @@ class MainWindow(QMainWindow):
             plot.setXRange(0, total, padding=0.02)
 
     def _refresh_plots(self) -> None:
+        if self._stabilizing:
+            remaining = self._stabilization_deadline - time.monotonic()
+            if remaining <= 0:
+                self._begin_recording_after_stabilization()
+            else:
+                self.rec_status.setText(
+                    f"心率带稳定中，{math.ceil(remaining)} 秒后开始录制"
+                )
+
         if self._ecg_dirty and self._ecg_buffer:
             n = len(self._ecg_buffer)
             xs = np.arange(n, dtype=np.float64)
@@ -456,11 +502,29 @@ class MainWindow(QMainWindow):
             self.session_input.setText(name)
             self.session_input.setEnabled(False)
             self._reset_live_hrv_display()
-            self.recorder.start(name)
+            self._reset_signal_buffers()
+            self._stabilizing = True
+            self._stabilization_deadline = time.monotonic() + RECORDING_STABILIZATION_SEC
+            self._pending_session_name = name
             self.record_btn.setText("停止录制")
-            self.rec_status.setText(f"录制中 → logs/{name}/")
-            self.rec_status.setStyleSheet("color: #ef5350; font-weight: bold;")
+            self.rec_status.setText(
+                f"心率带稳定中，{int(RECORDING_STABILIZATION_SEC)} 秒后开始录制"
+            )
+            self.rec_status.setStyleSheet("color: #f9a825; font-weight: bold;")
+            self.rec_duration.setText("时长: 等待稳定")
         else:
+            if self._stabilizing:
+                self._stabilizing = False
+                self._pending_session_name = ""
+                self.record_btn.setText("开始录制")
+                self.session_input.setEnabled(True)
+                self.session_input.setText(default_session_name())
+                self._reset_live_hrv_display()
+                self.rec_status.setText("已取消，未录制")
+                self.rec_status.setStyleSheet("color: #888;")
+                self.rec_duration.setText("时长: 00:00")
+                return
+
             folder = self.recorder.stop()
             ecg_n = len(self.recorder.ecg_samples)
             acc_n = len(self.recorder.acc_x)
@@ -482,7 +546,25 @@ class MainWindow(QMainWindow):
                 f"RR: {rr_n} 个",
             )
 
+    def _begin_recording_after_stabilization(self) -> None:
+        if not self._stabilizing or not self.record_btn.isChecked():
+            return
+
+        name = self._pending_session_name
+        self._stabilizing = False
+        self._pending_session_name = ""
+        self._reset_live_hrv_display()
+        self.recorder.start(name)
+        self.rec_status.setText(f"录制中 → logs/{name}/")
+        self.rec_status.setStyleSheet("color: #ef5350; font-weight: bold;")
+        self.rec_duration.setText("时长: 00:00")
+        self.rec_samples.setText("样本: ECG 0 | ACC 0 | RR 0")
+
     def closeEvent(self, event) -> None:
+        if self._stabilizing:
+            self._stabilizing = False
+            self._pending_session_name = ""
+
         if self.recorder.recording:
             reply = QMessageBox.question(
                 self,
