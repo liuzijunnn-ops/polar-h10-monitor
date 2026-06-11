@@ -388,8 +388,16 @@ def _is_windows_auth_error(exc: BaseException) -> bool:
     text = f"{type(exc).__name__}: {exc}".lower()
     return (
         "insufficient authentication" in text
+        or "requires authentication" in text
+        or "requires authorization" in text
+        or "attribute requires authentication" in text
+        or "authentication is required" in text
         or "access is denied" in text
         or "protocol error" in text
+        or "属性需要" in text
+        or "需要进行验证" in text
+        or "需要身份验证" in text
+        or "身份验证" in text
         or "-2147023673" in text
         or "operation was canceled" in text
         or "操作已被用户取消" in text
