@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
 from device_worker import PolarWorker
 from hrv import MIN_DURATION_LIVE, compute_freq_hrv, compute_hrv, rr_cumulative_duration_sec
 from paths import LOGS_DIR
-from polar_python.models import ACCData, ECGData, HRData
+from polar_ble import ACCData, ECGData, HRData
 from recorder import ACC_SAMPLE_RATE, ECG_SAMPLE_RATE, SessionRecorder, default_session_name
 
 logger = logging.getLogger(__name__)

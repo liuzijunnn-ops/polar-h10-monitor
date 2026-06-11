@@ -25,16 +25,6 @@ hiddenimports = sorted(set([
     'bleak.backends.winrt.util',
     'bleak.backends.corebluetooth',
     'bleak.backends.bluezdbus',
-    'polar_python',
-    'polar_python.parsers',
-    'polar_python.parsers.polar',
-    'polar_python.parsers.hr',
-    'polar_python.parsers.compression',
-    'polar_python.models',
-    'polar_python.models.hr_data',
-    'polar_python.models.ecg_data',
-    'polar_python.models.acc_data',
-    'polar_python.device',
     'scipy',
     'scipy.signal',
     'numpy',
@@ -45,12 +35,12 @@ hiddenimports = sorted(set([
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',
     'paths',
+    'polar_ble',
     'hrv',
     'recorder',
     'device_worker',
     'gui',
-] + safe_collect_submodules('polar_python')
-  + safe_collect_submodules('bleak.backends.winrt')
+] + safe_collect_submodules('bleak.backends.winrt')
   + safe_collect_submodules('winrt')
   + safe_collect_submodules('bleak_winrt')))
 
