@@ -277,10 +277,11 @@ class MainWindow(QMainWindow):
         if data.rr_intervals:
             latest_rr = data.rr_intervals[-1]
             self.rr_value.setText(f"{latest_rr:.0f}")
-            for rr in data.rr_intervals:
-                self._rr_window.append(rr)
-                self._rr_freq_window.append(rr)
-            self._update_hrv_display()
+            if self.recorder.recording:
+                for rr in data.rr_intervals:
+                    self._rr_window.append(rr)
+                    self._rr_freq_window.append(rr)
+                self._update_hrv_display()
         self.recorder.add_hr(data.heartrate, data.rr_intervals)
 
     def _reset_live_hrv_display(self) -> None:
@@ -375,6 +376,8 @@ class MainWindow(QMainWindow):
         self.freq_hrv_ready.emit(metrics, freq_duration, rr_count)
 
     def _on_freq_hrv_ready(self, metrics: object, freq_duration: float, rr_count: int) -> None:
+        if not self.recorder.recording:
+            return
         if metrics is None:
             self._clear_freq_display(freq_duration, rr_count)
             return
@@ -386,6 +389,8 @@ class MainWindow(QMainWindow):
         self.freq_status.setStyleSheet("color: #66bb6a; font-size: 11px;")
 
     def _on_freq_hrv_failed(self, text: str) -> None:
+        if not self.recorder.recording:
+            return
         for label in self.freq_labels.values():
             label.setText("--")
         self.freq_status.setText(f"频域计算失败: {text}")
