@@ -13,6 +13,7 @@ from bleak import BleakScanner
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from polar_python import PolarDevice
+from polar_python.constants import PolarCharacteristic
 from polar_python.models import ACCData, ECGData, HRData
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,31 @@ def _prepare_windows_ble_thread() -> None:
         uninitialize_sta()
     except Exception:
         logger.debug("Unable to uninitialize WinRT STA state", exc_info=True)
+
+
+class PairingPolarDevice(PolarDevice):
+    async def connect(self) -> None:
+        if sys.platform != "win32":
+            await super().connect()
+            return
+
+        logger.info("Connecting with Windows pairing enabled")
+        await self._client.connect(pair=True)
+
+        try:
+            paired = await self._client.pair()
+            logger.info("Windows BLE pair result: %s", paired)
+        except Exception as exc:
+            logger.info("Windows BLE pair call did not complete cleanly: %s", exc)
+
+        await self._client.start_notify(
+            PolarCharacteristic.PMD_CONTROL_POINT.value,
+            self._handle_pmd_control,
+        )
+        await self._client.start_notify(
+            PolarCharacteristic.PMD_DATA.value,
+            self._handle_pmd_data,
+        )
 
 
 class PolarWorker(QObject):
@@ -147,7 +173,7 @@ class PolarWorker(QObject):
         device_name = device.name or "Polar H10"
         self.status_changed.emit(f"正在连接 {device_name}...")
         logger.info("Connecting to BLE device: %s", _device_label(device))
-        async with PolarDevice(device) as polar_device:
+        async with PairingPolarDevice(device) as polar_device:
             self.connected.emit(device_name)
 
             def ecg_callback(data: ECGData) -> None:
