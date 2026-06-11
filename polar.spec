@@ -4,44 +4,62 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
 root = Path(SPECPATH)
+
+
+def safe_collect_submodules(package):
+    try:
+        return collect_submodules(package)
+    except Exception:
+        return []
+
+
+hiddenimports = sorted(set([
+    'bleak',
+    'bleak.backends.winrt',
+    'bleak.backends.winrt.client',
+    'bleak.backends.winrt.scanner',
+    'bleak.backends.winrt.util',
+    'bleak.backends.corebluetooth',
+    'bleak.backends.bluezdbus',
+    'polar_python',
+    'polar_python.parsers',
+    'polar_python.parsers.polar',
+    'polar_python.parsers.hr',
+    'polar_python.parsers.compression',
+    'polar_python.models',
+    'polar_python.models.hr_data',
+    'polar_python.models.ecg_data',
+    'polar_python.models.acc_data',
+    'polar_python.device',
+    'scipy',
+    'scipy.signal',
+    'numpy',
+    'pyqtgraph',
+    'pyqtgraph.graphicsItems',
+    'PyQt6',
+    'PyQt6.QtCore',
+    'PyQt6.QtGui',
+    'PyQt6.QtWidgets',
+    'paths',
+    'hrv',
+    'recorder',
+    'device_worker',
+    'gui',
+] + safe_collect_submodules('polar_python')
+  + safe_collect_submodules('bleak.backends.winrt')
+  + safe_collect_submodules('winrt')
+  + safe_collect_submodules('bleak_winrt')))
 
 a = Analysis(
     [str(root / 'main.py')],
     pathex=[str(root)],
     binaries=[],
     datas=[],
-    hiddenimports=[
-        'bleak',
-        'bleak.backends.winrt',
-        'bleak.backends.corebluetooth',
-        'bleak.backends.bluezdbus',
-        'polar_python',
-        'polar_python.parsers',
-        'polar_python.parsers.polar',
-        'polar_python.parsers.hr',
-        'polar_python.parsers.compression',
-        'polar_python.models',
-        'polar_python.models.hr_data',
-        'polar_python.models.ecg_data',
-        'polar_python.models.acc_data',
-        'polar_python.device',
-        'scipy',
-        'scipy.signal',
-        'numpy',
-        'pyqtgraph',
-        'pyqtgraph.graphicsItems',
-        'PyQt6',
-        'PyQt6.QtCore',
-        'PyQt6.QtGui',
-        'PyQt6.QtWidgets',
-        'paths',
-        'hrv',
-        'recorder',
-        'device_worker',
-        'gui',
-    ],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -1,4 +1,5 @@
 polar-python>=1.1.1
+bleak>=0.22.2
 numpy>=1.24.0
 scipy>=1.10.0
 PyQt6>=6.5.0

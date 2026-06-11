@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
+import logging
+import time
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -25,19 +28,25 @@ from PyQt6.QtWidgets import (
 )
 
 from device_worker import PolarWorker
-from hrv import MIN_DURATION_LIVE, compute_hrv, rr_cumulative_duration_sec
+from hrv import MIN_DURATION_LIVE, compute_freq_hrv, compute_hrv, rr_cumulative_duration_sec
 from paths import LOGS_DIR
 from polar_python.models import ACCData, ECGData, HRData
 from recorder import ACC_SAMPLE_RATE, ECG_SAMPLE_RATE, SessionRecorder, default_session_name
 
+logger = logging.getLogger(__name__)
+
 RR_WINDOW = 60  # time-domain rolling window (beats)
 RR_FREQ_WINDOW = 150  # frequency needs ~45–60 s cumulative RR; 60 beats alone is often <60 s
 PLOT_REFRESH_MS = 16  # ~60 fps display refresh
+FREQ_UPDATE_MIN_INTERVAL_SEC = 5.0
 ECG_SAMPLE_RATE_HZ = ECG_SAMPLE_RATE
 ACC_SAMPLE_RATE_HZ = ACC_SAMPLE_RATE
 
 
 class MainWindow(QMainWindow):
+    freq_hrv_ready = pyqtSignal(object, float, int)
+    freq_hrv_failed = pyqtSignal(str)
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Polar H10 实时监控与录制")
@@ -58,6 +67,11 @@ class MainWindow(QMainWindow):
 
         self._ecg_dirty = False
         self._acc_dirty = False
+
+        self._hrv_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hrv")
+        self._freq_future: Future | None = None
+        self._last_freq_started_at = 0.0
+        self._freq_generation = 0
 
         self._build_ui()
         self._connect_signals()
@@ -230,6 +244,8 @@ class MainWindow(QMainWindow):
         self.worker.status_changed.connect(self._on_status)
         self.worker.connected.connect(self._on_connected)
         self.worker.error.connect(self._on_error)
+        self.freq_hrv_ready.connect(self._on_freq_hrv_ready)
+        self.freq_hrv_failed.connect(self._on_freq_hrv_failed)
 
     def _on_status(self, text: str) -> None:
         self.status_label.setText(text)
@@ -267,17 +283,27 @@ class MainWindow(QMainWindow):
             self._update_hrv_display()
         self.recorder.add_hr(data.heartrate, data.rr_intervals)
 
+    def _reset_live_hrv_display(self) -> None:
+        self._rr_window.clear()
+        self._rr_freq_window.clear()
+        self._freq_generation += 1
+        if self._freq_future is not None and not self._freq_future.done():
+            self._freq_future.cancel()
+        self._freq_future = None
+        self._last_freq_started_at = 0.0
+
+        self.hr_value.setText("--")
+        self.rr_value.setText("--")
+        for label in self.hrv_labels.values():
+            label.setText("--")
+        self._clear_freq_display(0.0, 0)
+
     def _update_hrv_display(self) -> None:
         rr_time = list(self._rr_window)
         rr_freq = list(self._rr_freq_window)
         freq_duration = rr_cumulative_duration_sec(rr_freq)
 
-        metrics = compute_hrv(
-            rr_time,
-            include_frequency=True,
-            freq_rr_intervals_ms=rr_freq,
-            min_freq_duration_sec=MIN_DURATION_LIVE,
-        )
+        metrics = compute_hrv(rr_time, include_frequency=False)
         if not metrics:
             return
 
@@ -290,23 +316,80 @@ class MainWindow(QMainWindow):
             else:
                 label.setText(f"{value:.1f}")
 
-        if metrics.frequency:
-            for key, label in self.freq_labels.items():
-                value = getattr(metrics.frequency, key)
-                label.setText(f"{value:.2f}")
+        self._schedule_freq_hrv(rr_freq, freq_duration)
+
+    def _clear_freq_display(self, freq_duration: float, rr_count: int) -> None:
+        for label in self.freq_labels.values():
+            label.setText("--")
+        need = max(0.0, MIN_DURATION_LIVE - freq_duration)
+        self.freq_status.setText(
+            f"累积 RR 时长: {freq_duration:.0f}s / {int(MIN_DURATION_LIVE)}s"
+            f"（还需约 {need:.0f}s）| 窗口 {rr_count} 拍"
+        )
+        self.freq_status.setStyleSheet("color: #888; font-size: 11px;")
+
+    def _schedule_freq_hrv(self, rr_freq: list[float], freq_duration: float) -> None:
+        rr_count = len(rr_freq)
+        if freq_duration < MIN_DURATION_LIVE:
+            self._clear_freq_display(freq_duration, rr_count)
+            return
+
+        if self._freq_future is not None and not self._freq_future.done():
             self.freq_status.setText(
-                f"累积 RR 时长: {freq_duration:.0f}s | 窗口 {len(rr_freq)} 拍"
-            )
-            self.freq_status.setStyleSheet("color: #66bb6a; font-size: 11px;")
-        else:
-            for label in self.freq_labels.values():
-                label.setText("--")
-            need = max(0.0, MIN_DURATION_LIVE - freq_duration)
-            self.freq_status.setText(
-                f"累积 RR 时长: {freq_duration:.0f}s / {int(MIN_DURATION_LIVE)}s"
-                f"（还需约 {need:.0f}s）| 窗口 {len(rr_freq)} 拍"
+                f"累积 RR 时长: {freq_duration:.0f}s | 窗口 {rr_count} 拍 | 频域计算中..."
             )
             self.freq_status.setStyleSheet("color: #888; font-size: 11px;")
+            return
+
+        now = time.monotonic()
+        if now - self._last_freq_started_at < FREQ_UPDATE_MIN_INTERVAL_SEC:
+            return
+
+        snapshot = list(rr_freq)
+        generation = self._freq_generation
+        self._last_freq_started_at = now
+        self.freq_status.setText(
+            f"累积 RR 时长: {freq_duration:.0f}s | 窗口 {rr_count} 拍 | 频域计算中..."
+        )
+        self.freq_status.setStyleSheet("color: #888; font-size: 11px;")
+        self._freq_future = self._hrv_executor.submit(
+            compute_freq_hrv,
+            snapshot,
+            min_duration_sec=MIN_DURATION_LIVE,
+        )
+        self._freq_future.add_done_callback(
+            lambda future: self._emit_freq_result(future, freq_duration, rr_count, generation)
+        )
+
+    def _emit_freq_result(
+        self, future: Future, freq_duration: float, rr_count: int, generation: int
+    ) -> None:
+        if future.cancelled() or generation != self._freq_generation:
+            return
+        try:
+            metrics = future.result()
+        except Exception as exc:
+            logger.exception("Frequency-domain HRV calculation failed")
+            self.freq_hrv_failed.emit(f"{type(exc).__name__}: {exc}")
+            return
+        self.freq_hrv_ready.emit(metrics, freq_duration, rr_count)
+
+    def _on_freq_hrv_ready(self, metrics: object, freq_duration: float, rr_count: int) -> None:
+        if metrics is None:
+            self._clear_freq_display(freq_duration, rr_count)
+            return
+
+        for key, label in self.freq_labels.items():
+            value = getattr(metrics, key)
+            label.setText(f"{value:.2f}")
+        self.freq_status.setText(f"累积 RR 时长: {freq_duration:.0f}s | 窗口 {rr_count} 拍")
+        self.freq_status.setStyleSheet("color: #66bb6a; font-size: 11px;")
+
+    def _on_freq_hrv_failed(self, text: str) -> None:
+        for label in self.freq_labels.values():
+            label.setText("--")
+        self.freq_status.setText(f"频域计算失败: {text}")
+        self.freq_status.setStyleSheet("color: #ef5350; font-size: 11px;")
 
     def _is_viewing_all(self, plot: pg.PlotWidget, total: int, margin: float = 0.02) -> bool:
         """True if x-axis shows the full buffer (user hasn't zoomed/panned to a sub-range)."""
@@ -367,6 +450,7 @@ class MainWindow(QMainWindow):
             name = self.session_input.text().strip() or default_session_name()
             self.session_input.setText(name)
             self.session_input.setEnabled(False)
+            self._reset_live_hrv_display()
             self.recorder.start(name)
             self.record_btn.setText("停止录制")
             self.rec_status.setText(f"录制中 → logs/{name}/")
@@ -379,6 +463,7 @@ class MainWindow(QMainWindow):
             self.record_btn.setText("开始录制")
             self.session_input.setEnabled(True)
             self.session_input.setText(default_session_name())
+            self._reset_live_hrv_display()
             self.rec_status.setText(f"已保存: {folder}")
             self.rec_status.setStyleSheet("color: #66bb6a;")
             QMessageBox.information(
@@ -407,11 +492,20 @@ class MainWindow(QMainWindow):
 
         self._refresh_timer.stop()
         self.worker.stop()
+        if self._freq_future is not None and not self._freq_future.done():
+            self._freq_future.cancel()
+        self._hrv_executor.shutdown(wait=False, cancel_futures=True)
         super().closeEvent(event)
 
 
 def run_app() -> None:
     LOGS_DIR.mkdir(exist_ok=True)
+    logging.basicConfig(
+        filename=LOGS_DIR / "app.log",
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    )
+    logger.info("Starting Polar H10 monitor")
     app = QApplication([])
     app.setStyle("Fusion")
     window = MainWindow()
