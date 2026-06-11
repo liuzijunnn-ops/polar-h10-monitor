@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 SCAN_TIMEOUT_SEC = 12.0
 POLAR_NAME_FRAGMENT = "polar h10"
 DEVICE_HINT_ENV = "POLAR_DEVICE"
+STREAM_MODE_ENV = "POLAR_STREAM_MODE"
+HEART_RATE_MEASUREMENT_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 
 
 def _device_names(device: Any, adv_data: Any | None = None) -> list[str]:
@@ -45,6 +47,44 @@ def _matches_hint(device: Any, adv_data: Any | None, hint: str) -> bool:
 
 def _matches_polar_h10(device: Any, adv_data: Any | None = None) -> bool:
     return any(POLAR_NAME_FRAGMENT in name.lower() for name in _device_names(device, adv_data))
+
+
+def _stream_mode() -> str:
+    mode = os.getenv(STREAM_MODE_ENV, "").strip().lower()
+    if mode in {"full", "hr", "hr-only", "auto"}:
+        return mode
+    if sys.platform == "win32":
+        return "hr"
+    return "full"
+
+
+def _parse_heart_rate_measurement(data: bytes | bytearray | memoryview) -> HRData:
+    payload = bytes(data)
+    if len(payload) < 2:
+        raise ValueError("Heart Rate Measurement payload is too short")
+
+    flags = payload[0]
+    offset = 1
+    if flags & 0x01:
+        if len(payload) < offset + 2:
+            raise ValueError("Heart Rate Measurement payload misses uint16 heart rate")
+        heartrate = int.from_bytes(payload[offset : offset + 2], byteorder="little")
+        offset += 2
+    else:
+        heartrate = payload[offset]
+        offset += 1
+
+    if flags & 0x08:
+        offset += 2
+
+    rr_intervals: list[float] = []
+    if flags & 0x10:
+        while len(payload) >= offset + 2:
+            rr_raw = int.from_bytes(payload[offset : offset + 2], byteorder="little")
+            rr_intervals.append(rr_raw * 1000.0 / 1024.0)
+            offset += 2
+
+    return HRData(heartrate=heartrate, rr_intervals=rr_intervals)
 
 
 def _log_scan_results(results: list[tuple[Any, Any | None]]) -> None:
@@ -181,6 +221,21 @@ class PolarWorker(QObject):
         device_name = device.name or "Polar H10"
         self.status_changed.emit(f"正在连接 {device_name}...")
         logger.info("Connecting to BLE device: %s", _device_label(device))
+        mode = _stream_mode()
+        if mode in {"hr", "hr-only"}:
+            await self._run_hr_only(device, device_name)
+            return
+
+        try:
+            await self._run_full_streams(device, device_name)
+        except Exception:
+            if mode == "auto":
+                logger.exception("Full Polar PMD stream failed; falling back to HR/RR mode")
+                await self._run_hr_only(device, device_name)
+                return
+            raise
+
+    async def _run_full_streams(self, device: Any, device_name: str) -> None:
         async with PairingPolarDevice(device) as polar_device:
             self.connected.emit(device_name)
 
@@ -202,6 +257,23 @@ class PolarWorker(QObject):
             await polar_device.start_hr_stream(hr_callback=hr_callback)
 
             self.status_changed.emit("数据流已启动")
+
+            while not self._stop_event.is_set():
+                await asyncio.sleep(0.1)
+
+    async def _run_hr_only(self, device: Any, device_name: str) -> None:
+        logger.info("Starting standard Heart Rate Service mode")
+        async with BleakClient(device, timeout=30.0) as client:
+            self.connected.emit(device_name)
+
+            def hr_callback(_sender: Any, data: bytearray) -> None:
+                try:
+                    self.hr_received.emit(_parse_heart_rate_measurement(data))
+                except Exception:
+                    logger.exception("Failed to parse Heart Rate Measurement")
+
+            await client.start_notify(HEART_RATE_MEASUREMENT_UUID, hr_callback)
+            self.status_changed.emit("数据流已启动（HR/RR 模式，Windows 不采集 ECG/ACC）")
 
             while not self._stop_event.is_set():
                 await asyncio.sleep(0.1)

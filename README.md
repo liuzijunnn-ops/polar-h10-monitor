@@ -71,6 +71,8 @@
 
 - 如果连接失败，先打开程序同级目录下的 `logs/app.log`，里面会记录 BLE 扫描到的设备名、地址、RSSI 和错误 traceback
 - 确认 Polar H10 没有被手机 Polar Beat / Flow 或其他电脑占用；必要时关闭手机蓝牙或退出相关 App
+- Windows 默认使用标准 HR/RR 模式，避免 WinRT 对 Polar 私有 PMD（ECG/ACC）通道的配对/认证问题；该模式可实时显示心率、RR 和 HRV，但不采集 ECG/ACC
+- 若要在 Windows 强制尝试 ECG/ACC，可设置 `POLAR_STREAM_MODE=full` 后启动；如果再次出现 `Insufficient Authentication` 或 GATT 超时，说明当前 Windows 蓝牙栈无法稳定打开 PMD 通道
 - 如果日志里能看到设备但名称不完整，可在命令行设置设备名或地址片段后启动：
   ```bat
   set POLAR_DEVICE=Polar H10
