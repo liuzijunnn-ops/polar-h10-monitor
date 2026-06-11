@@ -9,7 +9,7 @@ import sys
 import threading
 from typing import Any
 
-from bleak import BleakScanner
+from bleak import BleakClient, BleakScanner
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from polar_python import PolarDevice
@@ -72,19 +72,18 @@ def _prepare_windows_ble_thread() -> None:
 
 
 class PairingPolarDevice(PolarDevice):
+    def __init__(self, address_or_ble_device: Any) -> None:
+        super().__init__(address_or_ble_device)
+        if sys.platform == "win32":
+            self._client = BleakClient(address_or_ble_device, pair=True, timeout=30.0)
+
     async def connect(self) -> None:
         if sys.platform != "win32":
             await super().connect()
             return
 
         logger.info("Connecting with Windows pairing enabled")
-        await self._client.connect(pair=True)
-
-        try:
-            paired = await self._client.pair()
-            logger.info("Windows BLE pair result: %s", paired)
-        except Exception as exc:
-            logger.info("Windows BLE pair call did not complete cleanly: %s", exc)
+        await self._client.connect()
 
         await self._client.start_notify(
             PolarCharacteristic.PMD_CONTROL_POINT.value,
