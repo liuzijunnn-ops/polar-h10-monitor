@@ -22,6 +22,21 @@ DEVICE_HINT_ENV = "POLAR_DEVICE"
 STREAM_MODE_ENV = "POLAR_STREAM_MODE"
 
 
+def _user_facing_ble_error(exc: BaseException) -> str:
+    text = f"{type(exc).__name__}: {exc}"
+    normalized = text.lower()
+    if sys.platform == "darwin" and (
+        "cberrordomain code=14" in normalized
+        or "peer removed pairing information" in normalized
+    ):
+        return (
+            "Mac 保存的 Polar H10 配对密钥已经失效。请退出程序，在“系统设置 → 蓝牙”中"
+            "找到 Polar H10 5FBA7226，选择“忽略此设备”，关闭再打开蓝牙，然后佩戴并湿润"
+            "心率带后重新启动程序。不要在系统蓝牙页面手动点“连接”。"
+        )
+    return text
+
+
 def _device_names(device: Any, adv_data: Any | None = None) -> list[str]:
     names = [getattr(device, "name", None)]
     if adv_data is not None:
@@ -111,7 +126,7 @@ class PolarWorker(QObject):
             self._loop.run_until_complete(self._main())
         except Exception as exc:
             logger.exception("BLE worker failed")
-            self.error.emit(f"{type(exc).__name__}: {exc}")
+            self.error.emit(_user_facing_ble_error(exc))
         finally:
             self._loop.close()
             self.status_changed.emit("已断开")
