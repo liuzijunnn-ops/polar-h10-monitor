@@ -9,7 +9,8 @@ fi
 source .venv/bin/activate
 
 pip install -r requirements.txt pyinstaller
-pyinstaller --noconfirm polar.spec
+python scripts/collect_licenses.py
+python -m PyInstaller --noconfirm polar.spec
 
 echo ""
 echo "Build complete: dist/PolarH10Monitor/PolarH10Monitor"

@@ -1,175 +1,173 @@
-# Polar H10 实时监控与 HRV 录制
+# Polar H10 Monitor
 
-参考 [polar-python](https://pypi.org/project/polar-python/) 和 [polar-display](https://github.com/zHElEARN/polar-display) 的使用方式开发；当前采集链路使用本项目内置的 Bleak/Polar PMD 协议实现，不再依赖 `polar-python` 连接设备。
+[![Build](https://github.com/liuzijunnn-ops/polar-h10-monitor/actions/workflows/build.yml/badge.svg)](https://github.com/liuzijunnn-ops/polar-h10-monitor/actions/workflows/build.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
+**用电脑通过蓝牙接收 Polar H10 数据，实时查看 ECG / ACC 波形、心率与 HRV，并按会话导出数据。**
+
+这是基于 Python、PyQt6 和 Bleak 的本地桌面应用，主要面向运动数据采集、教学与研究原型。界面为中文，数据保存在本机。本项目参考并改编了 [polar-python](https://github.com/zHElEARN/polar-python) 的部分协议解析代码，并参考 [polar-display](https://github.com/zHElEARN/polar-display) 的展示与录制流程；详见[来源与许可证](THIRD_PARTY_NOTICES.md)。本项目与 Polar 公司无隶属或官方认证关系。
 
 ## 功能
 
-- 实时显示 **ECG**（130 Hz）、**ACC**（25 Hz，三轴）波形，60 fps 刷新
-- 波形保留完整历史，滚轮缩放 / 拖拽平移可查看全貌
-- 实时显示心率、RR 间隔及 **HRV 时域 + 频域** 指标
-- 点击按钮开始/停止录制，每次录制保存为独立会话
-- 录制前可自定义会话文件夹名称（默认 `YYYYMMDD-HHMMSS`，与 polar-display 一致）
+| 数据 / 功能 | 当前实现 |
+| --- | --- |
+| ECG 心电 | 请求 130 Hz、14 bit，显示与保存 µV 样本 |
+| ACC 加速度 | 请求 25 Hz、16 bit、±2 g，显示与保存三轴 mg 样本 |
+| HR / RR | 标准 BLE Heart Rate Service，bpm / ms |
+| HRV 时域 | 平均 RR、平均 HR、SDNN、RMSSD、pNN50 等 |
+| HRV 频域 | 插值 RR 序列、Welch PSD，计算 VLF / LF / HF 与 LF/HF |
+| 会话录制 | 自定义名称、10 秒稳定等待、开始 / 停止、会话间清空缓冲 |
+| 导出 | NumPy `.npy` / `.npz`、CSV、HRV JSON、会话元数据 |
+| 波形浏览 | 保留本次会话全部历史，滚轮缩放、拖拽平移 |
 
-## 环境要求
+当前采集链路由 `polar_ble.py` 通过 Bleak 直接连接设备，不再依赖 `polar-python` 包。仅实现单台 H10 的采集；不会同时录制多台设备。显示定时器约 60 fps，不代表蓝牙采样率或实际刷新性能保证。
 
-- Polar H10 心率带（湿润电极贴片后佩戴）
-- 电脑支持蓝牙 BLE
-- **方式 A（推荐）**：Windows 10/11 或 macOS，无需安装 Python
-- **方式 B**：Python 3.10+（开发者 / Linux）
+## 快速开始：源码运行
 
----
+需要 Polar H10 胸带、支持 BLE 的电脑、Python **3.10+**。自动构建使用 Python 3.11；建议优先使用 3.11。Windows / macOS 有构建流程；Linux 源码运行需要 BlueZ 和图形桌面，尚未完成本项目实机验证。
 
-## 安装教程（普通用户 · 下载安装包）
-
-### 1. 下载
-
-打开 GitHub **Releases** 页面，下载对应系统的 zip：
-
-| 系统 | 文件 |
-|------|------|
-| Windows | `PolarH10Monitor-Windows.zip` |
-| macOS | `PolarH10Monitor-macOS.zip` |
-
-> 若 Release 尚未生成：进入仓库 **Actions → Build**，等最新一次构建完成后，在 **Artifacts** 里下载 `PolarH10Monitor-Windows` 或 `PolarH10Monitor-macOS`。
-
-### 2. 解压
-
-将 zip 解压到任意目录，例如：
-
-- Windows：`C:\Tools\PolarH10Monitor\`
-- macOS：`~/Applications/PolarH10Monitor/`
-
-解压后文件夹内应包含 `PolarH10Monitor.exe`（Windows）或 `PolarH10Monitor`（macOS）及依赖文件。**请保留整个文件夹**，不要只复制单个 exe。
-
-### 3. 首次运行
-
-**Windows**
-
-1. 确认电脑蓝牙已开启
-2. 双击 `PolarH10Monitor.exe`
-3. 若 Windows 安全提示「未知发布者」，点 **更多信息 → 仍要运行**（开源未签名应用常见）
-
-**macOS**
-
-1. 确认蓝牙已开启
-2. 首次运行若提示「无法验证开发者」：
-   ```bash
-   xattr -cr /路径/to/PolarH10Monitor
-   ```
-   或在 **系统设置 → 隐私与安全性** 中允许打开
-3. 双击 `PolarH10Monitor` 运行
-
-若出现 `CBErrorDomain Code=14: Peer removed pairing information`，表示 Mac 保存的配对密钥与 H10 当前配对信息不一致。退出程序，在 **系统设置 → 蓝牙 → 我的设备** 中找到 Polar H10，选择 **忽略此设备**，关闭再打开蓝牙，然后佩戴并湿润心率带后重新启动程序。不要在系统蓝牙页面手动连接，程序会自行建立 BLE 连接。
-
-### 4. 使用
-
-1. 打开 Polar H10，贴在胸口
-2. 程序自动扫描并连接（顶部显示「已连接」）
-3. （可选）修改顶部 **会话名称**
-4. 点击 **开始录制** → 采集一段时间 → 点击 **停止录制**
-5. 数据保存在程序**同级目录**的 `logs/<会话名>/` 下
-
-### Windows 蓝牙排查
-
-- 如果连接失败，先打开程序同级目录下的 `logs/app.log`，里面会记录 BLE 扫描到的设备名、地址、RSSI 和错误 traceback
-- 确认 Polar H10 没有被手机 Polar Beat / Flow 或其他电脑占用；必要时关闭手机蓝牙或退出相关 App
-- Windows 默认尝试完整 ECG/ACC/HR/RR 模式，和 macOS 使用同一套功能；程序会直接订阅 Polar PMD 控制/数据特征，不再通过 `polar-python`
-- 如果 Windows 在打开 PMD 时出现 `Insufficient Authentication`、`操作已被用户取消` 或 GATT 超时，程序会尝试一次配对、断开、禁用缓存服务后重连并重试 PMD
-- 若只想确认标准心率服务是否可用，可设置 `POLAR_STREAM_MODE=hr` 后启动；该诊断模式只显示心率/RR，不采集 ECG/ACC
-- 如果日志里能看到设备但名称不完整，可在命令行设置设备名或地址片段后启动：
-  ```bat
-  set POLAR_DEVICE=Polar H10
-  PolarH10Monitor.exe
-  ```
-- 如果 Windows 已经配对过但仍连接异常，可在系统蓝牙设置中删除该设备，重启蓝牙后再运行程序
-
-### 5. 数据位置
-
-```
-PolarH10Monitor/          ← 程序所在文件夹
-├── PolarH10Monitor.exe   （或 macOS 可执行文件）
-└── logs/
-    └── 20260610-120000/  ← 每次录制一个文件夹
-        ├── raw/
-        ├── csv/
-        ├── hrv.json
-        └── meta.json
-```
-
----
-
-## 安装教程（开发者 · 源码运行）
+1. 湿润胸带电极，扣上 H10 并佩戴；打开电脑蓝牙。
+2. 退出可能占用设备的手机应用或其他采集程序。
+3. 克隆项目并安装依赖：
 
 ```bash
 git clone https://github.com/liuzijunnn-ops/polar-h10-monitor.git
 cd polar-h10-monitor
+```
+
+**macOS / Linux**
+
+```bash
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 python main.py
 ```
 
-## 输出目录结构
+**Windows PowerShell**（无需修改脚本执行策略）
 
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
 ```
-logs/<会话名>/
-├── raw/                  # 原始二进制数据
+
+macOS 首次运行时允许 Python / Terminal 访问蓝牙。若系统未弹出授权或权限被拒绝，在“系统设置 → 隐私与安全性 → 蓝牙”检查相应程序权限。
+
+## 录制步骤
+
+1. 启动后程序扫描约 12 秒，默认选择第一台名称包含 `Polar H10` 的设备。
+2. 等待状态栏显示“数据流已启动”。此时尚未保存数据，波形与 HRV 要在开始录制后才更新。
+3. 填写**新的、唯一的会话名称**，例如 `session_001_sitting`。只用文件夹名，不要填写路径、`..`、斜杠或反斜杠；当前版本不会阻止重名覆盖。
+4. 点击“开始录制”，等待 **10 秒稳定倒计时**。倒计时内的数据会丢弃。
+5. 观察 ECG / ACC 波形、心率、RR 与 HRV。没有 RR 时，不会生成 HRV；不要把空白指标当成 0。
+6. 点击“停止录制”，等待“录制完成”弹窗并核对保存路径、样本数和文件。
+7. 下一次录制会清空波形和 HRV 缓冲，再等待 10 秒。停止期间保持 BLE 连接，但不累计数据。
+
+倒计时内再次点击停止会取消本次录制，不保存会话。正常录制时关闭窗口会询问是否保存后退出。数据在停止或正常退出时写盘，**强制结束进程或断电可能丢失尚未保存的会话**。长时间录制会持续增加内存占用，建议分段采集并检查文件。
+
+## 数据保存位置
+
+- 源码运行：项目目录下 `logs/<会话名>/`。
+- 打包运行：可执行文件同级的 `logs/<会话名>/`，请放在可写目录。
+- 运行日志：`logs/app.log`，可能包含附近蓝牙设备名称、地址与部分数据包；报告问题前请脱敏。
+
+```text
+logs/session_001_sitting/
+├── raw/
 │   ├── ecg.npy
 │   ├── ecg_timestamps.npy
 │   ├── acc.npz
 │   ├── rr.npz
 │   └── hr.npz
-├── csv/                  # CSV 导出
+├── csv/
 │   ├── ecg.csv
 │   ├── acc.csv
 │   ├── rr.csv
 │   ├── hr.csv
 │   └── hrv.csv
-├── hrv.json              # HRV 汇总（时域 + 频域）
-└── meta.json             # 会话元数据
+├── hrv.json
+└── meta.json
 ```
 
-## HRV 指标
+只有实际收到的数据流才生成对应文件；HRV 至少需要两个有效 RR，频域还需要满足时长条件。字段、单位、时间戳含义和读取示例见[数据格式说明](docs/DATA_FORMAT.md)。
 
-**时域**（基于 RR 间隔）：
+**时间戳边界：** ECG / ACC 保存的是设备数据包时间戳，同一包内的样本共享该时间戳；HR / RR 使用电脑收到通知的时间。程序没有执行设备与电脑时钟同步，也没有重建逐样本时间。不要将导出列直接视为经过验证的跨设备同步时间。
 
-- SDNN、RMSSD、pNN50
-- 平均 RR / HR、最小 / 最大 / 中位 RR
+## HRV 的计算范围
 
-**频域**（录制 ≥60s 且 RR ≥30 时计算，Welch PSD）：
+| 位置 | 使用的数据 | 频域门槛 |
+| --- | --- | --- |
+| 实时侧栏时域 | 最近 60 个有效 RR | 不适用 |
+| 实时侧栏频域 | 最近 150 个有效 RR | 至少 30 个 RR，累积 RR 时长 ≥45 秒 |
+| 保存的 HRV 汇总 | 本次会话全部有效 RR | 至少 30 个 RR，累积 RR 时长 ≥60 秒 |
 
-- VLF / LF / HF 功率（ms²）
-- LF/HF 比值、总功率
+RR 只经过有限值和 `300–2000 ms` 范围筛选，超出范围的 RR 不进入 GUI 录制文件或 HRV；这不是完整的异位搏动识别或运动伪迹校正。频域使用 4 Hz 插值与 Welch PSD；代码中的显示门槛只是实现条件，不表示已经满足正式 HRV 研究的记录时长或质量要求。短记录尤其不适合解读 VLF。本软件未完成独立心电参照验证，不用于医学诊断。
 
-界面侧边栏：时域为最近 60 个 RR 的滚动窗口；频域使用最近 150 个 RR，累积时长 ≥45s 后显示（下方有进度提示）。`hrv.json` 为整段录制的完整统计（频域要求 ≥60s）。
+## 蓝牙排障与高级选项
 
-实时 HRV 只在录制期间累计和计算。停止录制后，程序保持蓝牙连接以避免 Windows 再次配对，但会丢弃收到的 ECG、ACC、HR 和 RR，不再更新界面或统计。再次点击开始录制后先等待 10 秒让心率带稳定，倒计时期间的数据同样丢弃，然后从零开始本次录制。
+- **找不到设备：** 检查佩戴、电极湿润、蓝牙距离、电池和其他程序占用。当前没有设备选择列表；多设备环境下建议指定 `POLAR_DEVICE`。
+- **已连接但没有波形：** 先确认已点击开始录制并完成稳定倒计时，再看样本计数；“已连接”本身不代表所有数据流已经启动。
+- **macOS `Peer removed pairing information` / Code=14：** 退出程序，在“系统设置 → 蓝牙”忽略该 H10，关闭再打开蓝牙，再佩戴并启动程序。让程序建立 BLE 连接。
+- **Windows `Insufficient Authentication` / GATT 超时：** 程序会尝试配对、断开及重连一次。仍失败时删除系统中旧配对，重启蓝牙，检查是否被其他应用占用。
+- **连接中断：** 当前没有自动重连；先停止并保存会话，再退出重开。检查样本数和信号连续性。
+- **HR 正常但无 RR：** HRV 需要胸带发出的 RR 字段；检查设备状态与日志，HR 值本身不能替代 RR。
 
-RR 小于 300 ms 或大于 2000 ms 会作为明显异常值丢弃，不会进入实时 HRV、录制文件或最终汇总。开始新会话时还会清空波形和 HRV 缓冲，避免换人、摘戴心率带或中途空窗的数据混入下一次测量。
+| 环境变量 | 值与含义 |
+| --- | --- |
+| `POLAR_DEVICE` | 设备名称或地址片段，大小写不敏感；匹配不到时仍会回退选择第一台 H10，务必核对状态栏设备名 |
+| `POLAR_STREAM_MODE` | `full` 默认：ECG / ACC / HR / RR；`hr` 或 `hr-only`：仅 HR / RR；`auto`：完整采集失败后尝试 HR / RR |
 
-## 打包为可双击运行的程序
+macOS / Linux：
 
-### GitHub Actions（推荐）
+```bash
+POLAR_DEVICE='Polar H10' POLAR_STREAM_MODE=hr python main.py
+```
 
-推送到 GitHub 后，在 **Actions** 页可下载构建产物：
+Windows PowerShell：
 
-- 推送到 `main` / 打 `v*` 标签 → 自动构建 Windows + macOS
-- 手动触发：**Actions → Build → Run workflow**
+```powershell
+$env:POLAR_DEVICE = 'Polar H10'
+$env:POLAR_STREAM_MODE = 'hr'
+.\.venv\Scripts\python.exe main.py
+```
 
-打标签 `v1.0.0` 等会自动创建 [Release](https://github.com/liuzijunnn-ops/polar-h10-monitor/releases) 并附上 zip 安装包。
+HR 模式不会采集 ECG / ACC，适合检查标准心率服务；`auto` 回退时也可能没有 ECG / ACC。诊断结束后删除该环境变量或改为 `full`。
 
-### 本地打包
+## 可执行程序与构建
 
-**Windows：**
+[Releases](https://github.com/liuzijunnn-ops/polar-h10-monitor/releases) 中的旧版本只对应各自标签，不一定包含当前源码的修复。需要当前实现时请源码运行，或从最近成功的 [Build 工作流](https://github.com/liuzijunnn-ops/polar-h10-monitor/actions/workflows/build.yml) 下载对应提交的构建产物。**构建成功不等于在你的蓝牙硬件上完成实测。**
+
+保留解压后的整个文件夹及 `_internal` 内容，不要只复制 `.exe` 或主程序；macOS / Linux 解压若丢失执行权限，可执行 `chmod +x PolarH10Monitor`，再从终端运行。打包程序未签名或公证，系统可能拦截；也可选择源码运行。
+
+本地打包：
+
+```bash
+# macOS
+bash build_mac.sh
+```
 
 ```bat
+:: Windows（命令提示符）
 build_windows.bat
 ```
 
-**macOS：**
+输出在 `dist/PolarH10Monitor/`。GitHub Actions 会测试后构建 Windows / macOS；`v*` 标签会触发 Release。macOS 构建只对应 runner 的 CPU 架构，不是 Universal 通用包。打包附带 README、GPL、上游 MIT 通知与依赖许可证清单；分发前应检查第三方许可要求。
+
+## 开发与验证
 
 ```bash
-chmod +x build_mac.sh && ./build_mac.sh
+python -m unittest discover -s tests -v
 ```
 
-运行 `dist/PolarH10Monitor/` 下的可执行文件，`logs/` 保存在程序同级目录。
+测试只使用合成协议包、合成 RR 与临时目录，检查解析、HRV、会话隔离和文件导出；不会连接真实设备，也不证明实际采样率、测量精度或平台 BLE 稳定性。欢迎通过 [Issues](https://github.com/liuzijunnn-ops/polar-h10-monitor/issues) 反馈，附系统、Python 版本、提交版本、复现步骤与脱敏日志。请勿上传个人生理数据或设备标识。
+
+## 开源来源与许可证
+
+- [polar-python — zHElEARN / Zachary Liu](https://github.com/zHElEARN/polar-python)：早期采集依赖，也是当前部分 PMD 常量、帧结构及差分解析的参考与改编来源（MIT）。
+- [polar-display — zHElEARN / Zachary Liu](https://github.com/zHElEARN/polar-display)：实时 ECG / ACC 展示、会话录制与文件组织的参考项目（MIT）。
+- [Bleak](https://github.com/hbldh/bleak)、[NumPy](https://numpy.org/)、[SciPy](https://scipy.org/)、[PyQt6](https://www.riverbankcomputing.com/software/pyqt/)、[pyqtgraph](https://www.pyqtgraph.org/)：运行依赖。
+
+本项目整体以 **GNU GPL v3.0** 发布，见 [LICENSE](LICENSE)。选择 GPLv3 与使用的开源 PyQt6 许可证保持兼容；上游 MIT 部分保留原作者版权与许可，不能仅以“引用链接”代替。详细来源、许可证原文和依赖关系见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 与 [licenses/](licenses/)。

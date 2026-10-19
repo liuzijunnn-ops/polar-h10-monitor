@@ -25,8 +25,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Test synthetic protocol, HRV and export
+        run: python -m unittest discover -s tests -v
+
+      - name: Collect third-party licenses
+        run: python scripts/collect_licenses.py
+
       - name: Build executable
-        run: pyinstaller --noconfirm polar.spec
+        run: python -m PyInstaller --noconfirm polar.spec
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -34,6 +40,7 @@ jobs:
           name: PolarH10Monitor-Windows
           path: dist/PolarH10Monitor/
           retention-days: 30
+          if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
@@ -51,8 +58,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Test synthetic protocol, HRV and export
+        run: python -m unittest discover -s tests -v
+
+      - name: Collect third-party licenses
+        run: python scripts/collect_licenses.py
+
       - name: Build executable
-        run: pyinstaller --noconfirm polar.spec
+        run: python -m PyInstaller --noconfirm polar.spec
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
@@ -60,6 +73,7 @@ jobs:
           name: PolarH10Monitor-macOS
           path: dist/PolarH10Monitor/
           retention-days: 30
+          if-no-files-found: error
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

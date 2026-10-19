@@ -5,6 +5,9 @@ polar-python. It uses Bleak directly for the standard Heart Rate service and
 Polar PMD ECG/ACC streams.
 """
 
+# Portions adapted from polar-python, Copyright (c) 2024 Zachary Liu (MIT).
+# See licenses/polar-python-MIT.txt and THIRD_PARTY_NOTICES.md.
+
 from __future__ import annotations
 
 import asyncio

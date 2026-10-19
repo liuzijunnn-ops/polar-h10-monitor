@@ -1,5 +1,14 @@
 .venv/
+venv/
 __pycache__/
-*.pyc
-logs/
+*.py[cod]
+logs*/
+.idea/
+.vscode/
 .DS_Store
+build/
+dist/
+*.log
+.env
+.env.*
+!.env.example

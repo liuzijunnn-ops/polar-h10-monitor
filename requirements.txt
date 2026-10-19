@@ -1,5 +1,5 @@
 bleak>=0.22.2,<0.23
-numpy>=1.24.0
-scipy>=1.10.0
-PyQt6>=6.5.0
-pyqtgraph>=0.13.0
+numpy>=2.0,<3
+scipy>=1.13,<2
+PyQt6>=6.5,<7
+pyqtgraph>=0.13,<0.15

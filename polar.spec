@@ -44,11 +44,23 @@ hiddenimports = sorted(set([
   + safe_collect_submodules('winrt')
   + safe_collect_submodules('bleak_winrt')))
 
+notices = root / 'build' / 'dependency-licenses'
+if not (notices / 'INDEX.json').is_file():
+    raise SystemExit('Run python scripts/collect_licenses.py before PyInstaller.')
+package_data = [
+    (str(root / 'README.md'), '.'),
+    (str(root / 'LICENSE'), '.'),
+    (str(root / 'THIRD_PARTY_NOTICES.md'), '.'),
+    (str(root / 'licenses'), 'licenses'),
+    (str(root / 'docs'), 'docs'),
+    (str(notices), 'dependency-licenses'),
+]
+
 a = Analysis(
     [str(root / 'main.py')],
     pathex=[str(root)],
     binaries=[],
-    datas=[],
+    datas=package_data,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

@@ -9,7 +9,11 @@ if not exist .venv (
 call .venv\Scripts\activate.bat
 
 pip install -r requirements.txt pyinstaller
-pyinstaller --noconfirm polar.spec
+if errorlevel 1 exit /b 1
+python scripts/collect_licenses.py
+if errorlevel 1 exit /b 1
+python -m PyInstaller --noconfirm polar.spec
+if errorlevel 1 exit /b 1
 
 echo.
 echo Build complete: dist\PolarH10Monitor\PolarH10Monitor.exe

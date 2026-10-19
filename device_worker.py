@@ -31,7 +31,7 @@ def _user_facing_ble_error(exc: BaseException) -> str:
     ):
         return (
             "Mac 保存的 Polar H10 配对密钥已经失效。请退出程序，在“系统设置 → 蓝牙”中"
-            "找到 Polar H10 5FBA7226，选择“忽略此设备”，关闭再打开蓝牙，然后佩戴并湿润"
+            "找到对应的 Polar H10，选择“忽略此设备”，关闭再打开蓝牙，然后佩戴并湿润"
             "心率带后重新启动程序。不要在系统蓝牙页面手动点“连接”。"
         )
     return text
